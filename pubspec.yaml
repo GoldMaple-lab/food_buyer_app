@@ -1,0 +1,30 @@
+name: food_buyer_app
+description: "A new Flutter project."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  http: ^1.2.1 
+  shared_preferences: ^2.2.3 
+  cached_network_image: ^3.3.1 
+  intl: ^0.19.0 # ถ้ายังต้องใช้
+  table_calendar: ^3.1.2 # ถ้ายังต้องใช้
+  socket_io_client: ^3.1.2
+  provider: ^6.1.2
+  audioplayers: ^6.0.0 # [!!] เพิ่ม Package นี้
+  
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+  - assets/audio/
