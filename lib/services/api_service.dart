@@ -17,10 +17,28 @@ class ApiService {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('jwt_token');
   }
-
-  Future<void> logout() async {
+  // [!!] 1. ฟังก์ชันเก็บข้อมูล User ลงเครื่อง (Private)
+  Future<void> _saveUserProfile(Map<String, dynamic> user) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('jwt_token');
+    await prefs.setInt('saved_userId', user['userId']);
+    await prefs.setString('saved_name', user['name'] ?? '');
+    await prefs.setString('saved_role', user['role']);
+  }
+
+  // [!!] 2. ฟังก์ชันดึงข้อมูล User จากเครื่อง (เพื่อเช็คว่าเคยล็อคอินไหม)
+  Future<Map<String, dynamic>?> getUserProfile() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('jwt_token');
+    final userId = prefs.getInt('saved_userId');
+    
+    // ถ้าไม่มี Token หรือไม่มี ID แปลว่าไม่ได้ล็อคอิน
+    if (token == null || userId == null) return null;
+
+    return {
+      'userId': userId,
+      'name': prefs.getString('saved_name'),
+      'role': prefs.getString('saved_role'),
+    };
   }
 
   Future<Map<String, String>> _getAuthHeaders() async {
@@ -31,7 +49,7 @@ class ApiService {
     };
   }
 
-  // --- 1. Auth Functions (Login เหมือนเดิม, Register ต่างกัน) ---
+  // [!!] 3. อัปเดตฟังก์ชัน login ให้เรียก _saveUserProfile
   Future<Map<String, dynamic>?> login(String email, String password) async {
   try {
     final response = await http.post(
@@ -43,13 +61,21 @@ class ApiService {
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
       await _saveToken(data['token']);
+      await _saveUserProfile(data);
       return data; // [!!] คืนค่าข้อมูล User
     }
-    return null;
-  } catch (e) {
-    return null;
+      return null;
+    } catch (e) {
+      return null;
+    }
   }
-}
+
+  // [!!] 4. อัปเดต logout ให้ล้างข้อมูลทั้งหมด
+  Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear(); // ล้างเกลี้ยง (Token + Profile)
+  }
+
 
   Future<bool> register(String name, String email, String password) async {
     try {
@@ -103,34 +129,38 @@ class ApiService {
   // สร้างคำสั่งซื้อใหม่
 
 // --- 3. Order Functions ---
-Future<Map<String, dynamic>?> createOrder(int storeId, double totalPrice, List<CartItem> items) async {
-  try {
-    // แปลง CartItems ให้เป็น List JSON
-    final orderItems = items.map((item) => {
-      'menu_id': item.menu['menu_id'],
-      'quantity': item.quantity,
-      'price_at_time': item.menu['price'],
-    }).toList();
+  Future<Map<String, dynamic>?> createOrder(int storeId, double totalPrice, List<CartItem> items) async {
+    try {
+      // [!!] ---- จุดแก้ไข: เพิ่ม title และ calories ในข้อมูลที่จะส่ง ----
+      final orderItems = items.map((item) => {
+        'menu_id': item.menu['menu_id'],
+        'quantity': item.quantity,
+        'price_at_time': item.menu['price'],
+        // [!] เพิ่ม 2 ค่านี้
+        'title': item.menu['title'], 
+        'calories': item.menu['calories'] ?? 0, 
+      }).toList();
+      // [!!] ---------------------------------------------------
 
-    final response = await http.post(
-      Uri.parse('$_baseUrl/orders'),
-      headers: await _getAuthHeaders(), // [!] ต้องใช้ Token
-      body: jsonEncode({
-        'store_id': storeId,
-        'total_price': totalPrice,
-        'items': orderItems,
-      }),
-    );
-
-    if (response.statusCode == 201) {
-      return jsonDecode(response.body); // คืน { message, orderId }
+      final response = await http.post(
+        Uri.parse('$_baseUrl/orders'),
+        headers: await _getAuthHeaders(),
+        body: jsonEncode({
+          'store_id': storeId,
+          'total_price': totalPrice,
+          'items': orderItems,
+        }),
+      );
+      
+      if (response.statusCode == 201) {
+        return jsonDecode(response.body);
+      }
+      return null;
+    } catch (e) {
+      print("Create Order Error: $e");
+      return null;
     }
-    return null;
-  } catch (e) {
-    print("Create Order Error: $e");
-    return null;
   }
-}
 
 Future<List<dynamic>> getMyOrders() async {
   try {

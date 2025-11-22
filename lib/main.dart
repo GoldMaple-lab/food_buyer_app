@@ -4,6 +4,9 @@ import 'package:food_buyer_app/models/user_provider.dart';  // [!] Import
 import 'package:food_buyer_app/services/cart_service.dart'; // [!] Import
 import 'package:food_buyer_app/services/socket_service.dart';// [!] Import
 import 'package:provider/provider.dart';
+import 'package:overlay_support/overlay_support.dart';
+import 'package:food_buyer_app/services/api_service.dart';
+import 'package:food_buyer_app/pages/main_nav_page.dart'; // [!] Import MainNavigationPage
 
 void main() {
   runApp(
@@ -23,7 +26,8 @@ class BuyerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return OverlaySupport.global(
+    child:  MaterialApp(
       title: 'Smart Food Advisor',
       theme: ThemeData(
         // [!] เราใช้สีหลักเป็นสีฟ้าสำหรับแอปผู้ซื้อ (แอปผู้ขายเป็นสีส้ม)
@@ -62,7 +66,68 @@ class BuyerApp extends StatelessWidget {
       ),
       
       // [!] จุดเริ่มต้นของแอปคือหน้า Login
-      home: LoginPage(), 
+      home: AuthWrapper(), 
+    )
     );
+  }
+}
+
+class AuthWrapper extends StatefulWidget {
+  const AuthWrapper({super.key});
+
+  @override
+  State<AuthWrapper> createState() => _AuthWrapperState();
+}
+
+class _AuthWrapperState extends State<AuthWrapper> {
+  bool _isLoading = true;
+  bool _isLoggedIn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkLoginStatus();
+  }
+
+  Future<void> _checkLoginStatus() async {
+    final apiService = ApiService();
+    // ดึงข้อมูลที่เซฟไว้
+    final userData = await apiService.getUserProfile();
+
+    if (userData != null && mounted) {
+      // [!] ถ้ามีข้อมูล -> ยัดใส่ Provider เพื่อให้แอปใช้งานต่อได้เลย
+      Provider.of<UserProvider>(context, listen: false).setUser(userData);
+      setState(() {
+        _isLoggedIn = true;
+      });
+    }
+    
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 1. กำลังเช็ค... ให้หมุนติ้วๆ ไปก่อน
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    // 2. เช็คเสร็จแล้ว
+    if (_isLoggedIn) {
+      // [!!] ถ้าเป็น Seller App ให้ไป HomePage()
+      // [!!] ถ้าเป็น Buyer App ให้ไป MainNavigationPage()
+      // (เลือกบรรทัดที่ตรงกับแอปที่คุณกำลังแก้อยู่)
+      return MainNavigationPage(); // สำหรับ Seller App
+      // return const MainNavigationPage(); // สำหรับ Buyer App
+    } else {
+      // 3. ถ้ายังไม่ล็อคอิน ไปหน้า Login
+      return const LoginPage();
+    }
   }
 }

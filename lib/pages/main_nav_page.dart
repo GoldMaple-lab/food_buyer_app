@@ -62,7 +62,7 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
             icon: Icon(Icons.logout),
             onPressed: () async {
               // [!] โค้ด Logout
-              final apiService = Provider.of<ApiService>(context, listen: false);
+              final apiService = ApiService();
               await apiService.logout();
               Provider.of<SocketService>(context, listen: false).disconnect();
               Provider.of<UserProvider>(context, listen: false).clearUser();

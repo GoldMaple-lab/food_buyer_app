@@ -18,6 +18,7 @@ dependencies:
   socket_io_client: ^3.1.2
   provider: ^6.1.2
   audioplayers: ^6.0.0 # [!!] เพิ่ม Package นี้
+  overlay_support: ^2.1.0
   
 dev_dependencies:
   flutter_test:

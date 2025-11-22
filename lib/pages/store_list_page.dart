@@ -26,23 +26,9 @@ class _StoreListPageState extends State<StoreListPage> {
   @override
   void initState() {
     super.initState();
-    _storesFuture = _apiService.getStores(); // [!] โหลดร้านค้าตอนเปิด
-    _connectToSocket();
+    _storesFuture = _apiService.getStores(); // [!] โหลดร้านค้าตอนเปิดหน้า
   }
-  void _connectToSocket() {
-    final userId = Provider.of<UserProvider>(context, listen: false).user?.userId;
-    if (userId != null) {
-      Provider.of<SocketService>(context, listen: false).connect(userId);
-    } else {
-      print("Socket Error: Buyer UserID is null.");
-    }
-  }
-  @override
-  void dispose() {
-    Provider.of<SocketService>(context, listen: false).disconnect();
-    super.dispose();
-  }
-
+  
   @override
   Widget build(BuildContext context) {
     return Scaffold(

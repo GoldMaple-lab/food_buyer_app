@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'dart:async';
+import 'package:food_buyer_app/widgets/notification_banner.dart';
 import 'package:food_buyer_app/services/audio_service.dart';
 
 class SocketService extends ChangeNotifier {
@@ -36,9 +37,50 @@ class SocketService extends ChangeNotifier {
       _lastOrderUpdate = data; 
         _orderUpdateController.add(data);
         notifyListeners();
-        // เล่นเสียงแจ้งเตือน
-        if (data != null && data['status'] == 'ready_for_pickup') {
-            AudioService.playNotificationSound('new_order_alert.mp3');
+        // [!!] จัดการข้อความตามสถานะ
+      String title = 'อัปเดตสถานะคำสั่งซื้อ';
+      String message = 'สถานะออเดอร์ #${data['orderId']} เปลี่ยนแปลง';
+      IconData icon = Icons.notifications;
+      Color color = Colors.blue;
+      String? soundFile;
+
+      if (data['status'] == 'accepted') {
+        title = 'ร้านรับออเดอร์แล้ว! 👨‍🍳';
+        message = 'กำลังเริ่มปรุงอาหารให้อร่อยสุดฝีมือ';
+        icon = Icons.soup_kitchen;
+        color: Colors.blue;
+        soundFile = 'audio/order_ready_alert.mp3'; // (ใช้เสียงเดียวไปก่อน หรือหาเพิ่ม)
+      } 
+      else if (data['status'] == 'ready_for_pickup') {
+        title = 'อาหารพร้อมแล้ว! 🛵';
+        message = 'ไปรับที่ร้านได้เลย หรือรอพี่ไรเดอร์สักครู่';
+        icon = Icons.delivery_dining;
+        color: Colors.purple;
+        soundFile = 'audio/order_ready_alert.mp3';
+      }
+      else if (data['status'] == 'completed') {
+        title = 'ขอบคุณที่ใช้บริการ 🙏';
+        message = 'ออเดอร์เสร็จสิ้น ทานให้อร่อยนะครับ';
+        icon = Icons.check_circle;
+        color: Colors.green;
+      }
+      else if (data['status'] == 'cancelled') {
+        title = 'ออเดอร์ถูกยกเลิก ❌';
+        message = 'เสียใจด้วย ออเดอร์นี้ถูกยกเลิก';
+        icon = Icons.cancel;
+        color: Colors.red;
+      }
+
+      // 1. แสดง Banner (ทุกกรณี)
+      showFacebookStyleNotification(
+        title: title,
+        message: message,
+        icon: icon,
+        color: color,
+      );
+        // 2. เล่นเสียง (ถ้ามี)
+      if (soundFile != null) {
+        AudioService.playNotificationSound(soundFile);
       }
     });
     
