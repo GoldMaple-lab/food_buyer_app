@@ -3,6 +3,8 @@ import 'package:food_buyer_app/services/api_service.dart';
 import 'package:provider/provider.dart'; // [!] Import
 import 'package:food_buyer_app/services/cart_service.dart'; // [!] Import
 import 'package:food_buyer_app/pages/menu_detail_page.dart';
+import 'package:food_buyer_app/pages/menu_detail_page.dart';
+import 'package:cached_network_image/cached_network_image.dart'; // ถ้าใช้ CachedNetworkImage
 
 class RecommendationPage extends StatefulWidget {
   const RecommendationPage({super.key});
@@ -14,23 +16,32 @@ class RecommendationPage extends StatefulWidget {
 class _RecommendationPageState extends State<RecommendationPage> {
   final ApiService _apiService = ApiService();
 
-  // --- States สำหรับ UI ---
+  // --- States ---
   String _weatherCondition = '...';
+  String _rawWeather = ''; // เก็บค่า weather ดิบๆ (เช่น 'rain', 'clear')
   final TextEditingController _chatController = TextEditingController();
   
-  // --- States สำหรับเก็บข้อมูลที่โหลดมา ---
   late Future<List<dynamic>> _tagsFuture;
   late Future<List<dynamic>> _moodsFuture;
-  List<dynamic> _allTags = []; // เก็บ Tags ที่โหลดเสร็จ
-  List<dynamic> _allMoods = []; // เก็บ Moods ที่โหลดเสร็จ
+  List<dynamic> _allTags = [];
+  List<dynamic> _allMoods = [];
 
-  // --- States สำหรับการค้นหา ---
-  List<dynamic> _suggestions = []; // ผลลัพธ์การค้นหา
+  List<dynamic> _suggestions = [];
   bool _isLoading = false;
-  String _currentSearchType = 'all'; // 'all', 'order' (สั่งกิน), 'recipe' (ทำเอง)
+  String _currentSearchType = 'all';
   Set<int> _selectedTagIds = {};
   Set<int> _selectedMoodIds = {};
-  String _moodText = ""; // จาก Chat Box
+  String _moodText = "";
+
+  // [!!] คำค้นหาที่ต้องการให้ trigger ระบบแนะนำตามสภาพอากาศ
+  final List<String> _triggerPhrases = [
+    'ไม่มีไอเดียเลย',
+    'กินอะไรดีวะ',
+    'เย็นนี้กินอะไรดี',
+    'วันนี้กินอะไรดี',
+    'กินอะไรดี',
+    'ไม่รู้จะกินอะไร'
+  ];
 
   @override
   void initState() {
@@ -41,53 +52,103 @@ class _RecommendationPageState extends State<RecommendationPage> {
   Future<void> _loadInitialData() async {
     setState(() => _isLoading = true);
     
-    // 1. โหลด Tags & Moods
-    _tagsFuture = _apiService.getTags();
-    _moodsFuture = _apiService.getMoods();
-    _allTags = await _tagsFuture;
-    _allMoods = await _moodsFuture;
+    try {
+      _tagsFuture = _apiService.getTags();
+      _moodsFuture = _apiService.getMoods();
+      _allTags = await _tagsFuture;
+      _allMoods = await _moodsFuture;
 
-    // 2. โหลดสภาพอากาศ
-    final weatherData = await _apiService.getWeather();
-    _weatherCondition = weatherData['description'] ?? 'ไม่ทราบ';
+      final weatherData = await _apiService.getWeather();
+      _weatherCondition = weatherData['description'] ?? 'ไม่ทราบ';
+      _rawWeather = weatherData['condition'] ?? 'clear'; // เก็บค่าดิบไว้ใช้คำนวณ
+
+    } catch (e) {
+      print("Init Error: $e");
+    }
 
     setState(() => _isLoading = false);
     
-    // 3. (Optional) รันค้นหาครั้งแรก (อาจจะค้นหาตามสภาพอากาศ)
-    _runRecommend();
+    // [!!] รันครั้งแรก (Limit 3)
+    _runRecommend(isInitialLoad: true);
   }
 
-  // [!!] ---- Logic การค้นหาใหม่ทั้งหมด ----
-  Future<void> _runRecommend() async {
+  // [!!] ---- Logic การค้นหาและแนะนำ (หัวใจหลัก) ----
+  Future<void> _runRecommend({bool isInitialLoad = false}) async {
     setState(() => _isLoading = true);
     
-    // --- (Optional) แปลง Mood Text เป็น ID ---
-    // (โค้ดส่วนนี้คือ "AI" เล็กๆ ที่เรานำกลับมา)
-    Set<int> moodIdsFromText = {};
-    if (_moodText.isNotEmpty) {
-      final detectedMood = _detectMood(_moodText); // (ฟังก์ชัน helper อยู่ด้านล่าง)
+    Set<int> moodIdsToSearch = Set.from(_selectedMoodIds);
+    Set<int> tagIdsToSearch = Set.from(_selectedTagIds);
+    int? limitResult; // จำกัดจำนวนผลลัพธ์
+
+    // 1. เช็คว่าเป็น "คำค้นหาพิเศษ" หรือไม่?
+    bool isTriggerPhrase = _triggerPhrases.any((phrase) => _moodText.contains(phrase));
+
+    // [!!] Logic: ถ้าเป็น Initial Load (เปิดแอป) หรือ พิมพ์คำว่า "กินอะไรดี..."
+    if (isInitialLoad || isTriggerPhrase) {
+      
+      // กำหนดจำนวนที่จะแสดง
+      limitResult = isInitialLoad ? 3 : 5; 
+
+      // เลือก Mood ตามสภาพอากาศ
+      String targetMoodName = 'hungry'; // ค่า Default
+      
+      if (_rawWeather.contains('rain') || _rawWeather.contains('drizzle') || _rawWeather.contains('thunder')) {
+        // ฝนตก -> แนะนำของอุ่นๆ หรือ อาหารไทย (แก้หนาว)
+        targetMoodName = 'tired'; // (สมมติว่า Tired = อยากกินของ Comfort food)
+        // หรือถ้าคุณมี mood 'warm' ใน DB ก็ใช้ 'warm'
+      } else if (_rawWeather.contains('clear') || _rawWeather.contains('sun')) {
+        // แดดออก/ร้อน -> แนะนำของสดชื่น
+        targetMoodName = 'refresh';
+      } else {
+        // เมฆครึ้ม/อื่นๆ
+        targetMoodName = 'hungry';
+      }
+
+      // หา ID ของ Mood นั้นจาก _allMoods
+      final foundMood = _allMoods.firstWhere(
+        (m) => m['mood_name'] == targetMoodName, 
+        orElse: () => null
+      );
+
+      if (foundMood != null) {
+        moodIdsToSearch.add(foundMood['mood_id']);
+        print("Auto-selecting mood: $targetMoodName for weather: $_rawWeather");
+      }
+      
+      // ถ้าเป็น Trigger Phrase ให้เคลียร์ข้อความค้นหา จะได้ไม่ไปกวนการค้นหาแบบ Text
+      if (isTriggerPhrase) {
+         // (เราไม่ลบ _moodText ออกจาก UI เพื่อให้ผู้ใช้เห็นว่าพิมพ์อะไรไป แต่เราไม่เอาไป search text)
+      }
+
+    } else if (_moodText.isNotEmpty) {
+      // --- Logic เดิม: ค้นหาตามอารมณ์ที่พิมพ์ (AI เล็กๆ) ---
+      final detectedMood = _detectMood(_moodText);
       if (detectedMood != 'neutral') {
         final foundMood = _allMoods.firstWhere(
           (m) => m['mood_name'] == detectedMood, 
           orElse: () => null
         );
         if (foundMood != null) {
-          moodIdsFromText.add(foundMood['mood_id']);
+          moodIdsToSearch.add(foundMood['mood_id']);
         }
       }
     }
 
-    // --- รวม ID ทั้งหมด ---
-    final allMoodIds = _selectedMoodIds.union(moodIdsFromText).toList();
-    final allTagIds = _selectedTagIds.toList();
-
-    // --- ยิง API "Smart Search" ---
+    // --- ยิง API ---
     try {
-      final results = await _apiService.searchMenus(
+      List<dynamic> results = await _apiService.searchMenus(
         type: _currentSearchType,
-        tagIds: allTagIds,
-        moodIds: allMoodIds,
+        tagIds: tagIdsToSearch.toList(),
+        moodIds: moodIdsToSearch.toList(),
       );
+
+      // [!!] ถ้ามีการจำกัดจำนวน (Limit)
+      if (limitResult != null && results.length > limitResult) {
+        // สุ่ม (Shuffle) ก่อนตัด เพื่อให้ไม่ซ้ำซาก
+        results.shuffle(); 
+        results = results.take(limitResult).toList();
+      }
+
       setState(() {
         _suggestions = results;
       });
@@ -98,13 +159,11 @@ class _RecommendationPageState extends State<RecommendationPage> {
     setState(() => _isLoading = false);
   }
 
-  // --- UI Builders (นำมาจากโค้ดต้นฉบับ) ---
   @override
   Widget build(BuildContext context) {
-    // [!] เราใช้ CustomScrollView (แบบแอปต้นฉบับ)
     return CustomScrollView(
       slivers: [
-        // --- 1. ส่วน Controls ทั้งหมด ---
+        // --- 1. Controls ---
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.all(12.0),
@@ -115,7 +174,7 @@ class _RecommendationPageState extends State<RecommendationPage> {
                 SizedBox(height: 12),
                 _buildChatBox(),
                 SizedBox(height: 12),
-                _buildTypeSelector(), // [!] UI ใหม่: เลือก สั่ง/ทำเอง
+                _buildTypeSelector(),
                 SizedBox(height: 12),
                 _buildFilterSection('หมวดหมู่ (Tags)', _tagsFuture, _allTags, _selectedTagIds, 'tag_id', 'tag_name'),
                 SizedBox(height: 12),
@@ -125,24 +184,33 @@ class _RecommendationPageState extends State<RecommendationPage> {
           ),
         ),
         
-        // --- 2. หัวข้อ "เมนูแนะนำ" ---
+        // --- 2. Header ---
         SliverToBoxAdapter(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
-            child: Text(
-              'เมนูแนะนำสำหรับคุณ', 
-              style: Theme.of(context).textTheme.headlineSmall
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            child: Row(
+              children: [
+                Text(
+                  'เมนูแนะนำสำหรับคุณ', 
+                  style: Theme.of(context).textTheme.headlineSmall
+                ),
+                Spacer(),
+                // แสดงจำนวนผลลัพธ์
+                if (!_isLoading)
+                  Text('${_suggestions.length} รายการ', style: TextStyle(color: Colors.grey)),
+              ],
             ),
           ),
         ),
 
-        // --- 3. รายการผลลัพธ์ ---
+        // --- 3. Result List ---
         _buildSliverSuggestionsList(),
       ],
     );
   }
 
-  // (Widget ย่อยๆ)
+  // ... (Keep _buildWeatherCard, _buildTypeSelector, _buildFilterSection as is) ...
+  // (Widget ย่อยๆ เดิมของคุณ ไม่ต้องแก้ ยกเว้น _buildChatBox)
 
   Widget _buildWeatherCard() {
     return Card(
@@ -161,7 +229,7 @@ class _RecommendationPageState extends State<RecommendationPage> {
       ),
     );
   }
-  
+
   Widget _buildChatBox() {
     return Card(
       child: Padding(
@@ -174,7 +242,7 @@ class _RecommendationPageState extends State<RecommendationPage> {
             TextField(
               controller: _chatController,
               decoration: InputDecoration(
-                labelText: 'เช่น "ร้อนจัง", "อยากกินอะไรเบาๆ"...',
+                labelText: 'เช่น "กินอะไรดี", "ร้อนจัง", "อยากกินเผ็ดๆ"...',
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 suffixIcon: IconButton(
                   icon: Icon(Icons.send),
@@ -182,7 +250,7 @@ class _RecommendationPageState extends State<RecommendationPage> {
                     setState(() {
                       _moodText = _chatController.text;
                     });
-                    _runRecommend(); // [!] ค้นหาใหม่
+                    _runRecommend(); // Trigger search
                     FocusScope.of(context).unfocus();
                   },
                 ),
@@ -192,15 +260,19 @@ class _RecommendationPageState extends State<RecommendationPage> {
                 _runRecommend();
               },
             ),
+            // แสดง Chip ถ้ามีการพิมพ์ข้อความค้างไว้
             if (_moodText.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 8.0),
                 child: Chip(
-                  label: Text('ฟิลเตอร์: "$_moodText"'),
+                  label: Text('ข้อความ: "$_moodText"'),
                   onDeleted: () {
-                    setState(() => _moodText = '');
-                    _chatController.clear();
-                    _runRecommend();
+                    setState(() {
+                      _moodText = '';
+                      _chatController.clear();
+                    });
+                    // พอลบข้อความ ก็รันแนะนำแบบ Initial Load (3 เมนู) ใหม่
+                    _runRecommend(isInitialLoad: true); 
                   },
                 ),
               )
@@ -209,8 +281,8 @@ class _RecommendationPageState extends State<RecommendationPage> {
       ),
     );
   }
-  
-  // [!] UI ใหม่: เลือกประเภท
+
+  // ... (Keep _buildTypeSelector, _buildFilterSection) ...
   Widget _buildTypeSelector() {
     return Card(
       child: Padding(
@@ -239,8 +311,7 @@ class _RecommendationPageState extends State<RecommendationPage> {
       ),
     );
   }
-  
-  // [!] UI ที่ Re-use ได้สำหรับ Tags และ Moods
+
   Widget _buildFilterSection(String title, Future<List<dynamic>> future, List<dynamic> allItems, Set<int> selectedIds, String idKey, String nameKey) {
     return Card(
       child: Padding(
@@ -288,7 +359,7 @@ class _RecommendationPageState extends State<RecommendationPage> {
     );
   }
 
-  // [!] UI แสดงผลลัพธ์
+  // ... (Keep _buildSliverSuggestionsList - copy from previous step but ensure imports) ...
   Widget _buildSliverSuggestionsList() {
     if (_isLoading) {
       return SliverFillRemaining(child: Center(child: CircularProgressIndicator()));
@@ -308,37 +379,26 @@ class _RecommendationPageState extends State<RecommendationPage> {
       delegate: SliverChildBuilderDelegate(
         (context, idx) {
           final menu = _suggestions[idx];
-          bool isForOrder = menu['store_id'] != null; // [!] เช็คว่าสั่งได้ไหม
+          bool isForOrder = menu['store_id'] != null;
           
-          return Card(
-            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            clipBehavior: Clip.antiAlias,
-            elevation: 3,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            child: InkWell(
-                    onTap: () {
-                        // [!!] เปิด MenuDetailPage
-                      Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (ctx) => MenuDetailPage(menu: menu),
-                            ),
-                          );
-                        },
+          return InkWell(
+            onTap: () {
+               // [!] อย่าลืม import MenuDetailPage
+               Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => MenuDetailPage(menu: menu)));
+            },
+            child: Card(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              clipBehavior: Clip.antiAlias,
+              elevation: 3,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // --- รูปเมนู ---
                   if (menu['image_url'] != null)
-                    Image.network(
-                      menu['image_url'],
-                      height: 180,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                    )
+                    Image.network(menu['image_url'], height: 180, width: double.infinity, fit: BoxFit.cover)
                   else
                     Container(height: 180, child: Center(child: Icon(Icons.fastfood, size: 60))),
                   
-                  // --- รายละเอียด ---
                   Padding(
                     padding: const EdgeInsets.all(12.0),
                     child: Row(
@@ -348,38 +408,25 @@ class _RecommendationPageState extends State<RecommendationPage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                menu['title'], 
-                                style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)
-                              ),
-                              if (isForOrder) // [!] ถ้าสั่งได้
-                                Text(
-                                  '${menu['price']} บาท • 🛒 ${menu['store_name']}',
-                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold),
-                                )
-                              else // [!] ถ้าเป็นสูตร
-                                Text(
-                                  'สูตรทำอาหาร • ${menu['calories']} kcal',
-                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.green, fontWeight: FontWeight.bold),
-                                ),
+                              Text(menu['title'], style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                              if (isForOrder)
+                                Text('${menu['price']} บาท • 🛒 ${menu['store_name']}', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold))
+                              else
+                                Text('สูตรทำอาหาร • ${menu['calories']} kcal', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.green, fontWeight: FontWeight.bold)),
                             ],
                           ),
                         ),
-                        
-                        // [!] ปุ่ม (สั่ง หรือ ดูสูตร)
                         if (isForOrder)
                           IconButton(
                             icon: Icon(Icons.add_shopping_cart, color: Theme.of(context).primaryColor, size: 30),
                             onPressed: () {
                               final cart = Provider.of<CartService>(context, listen: false);
                               cart.addItem(menu);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('เพิ่ม "${menu['title']}" ลงตะกร้า'), duration: Duration(seconds: 1)),
-                              );
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('เพิ่ม "${menu['title']}" ลงตะกร้า'), duration: Duration(seconds: 1)));
                             },
                           )
                         else
-                          Icon(Icons.menu_book, color: Colors.green, size: 30), // (ปุ่มดูสูตร)
+                          Icon(Icons.menu_book, color: Colors.green, size: 30),
                       ],
                     ),
                   ),
@@ -393,12 +440,12 @@ class _RecommendationPageState extends State<RecommendationPage> {
     );
   }
 
-  // [!!] ---- Helper Function (จากโค้ดต้นฉบับ) ----
+  // [!] Helper เก่า
   String _detectMood(String text) {
     final t = text.toLowerCase();
     if (t.contains('เหนื่อย') || t.contains('ไม่สบาย') || t.contains('เบื่อ')) return 'tired';
     if (t.contains('ร้อน') || t.contains('ร้อนจัง') || t.contains('สดชื่น')) return 'refresh';
-    if (t.contains('หนาว')) return 'hungry'; // (อาจจะอยากกินของร้อนๆ = hungry)
+    if (t.contains('หนาว')) return 'hungry'; 
     if (t.contains('ฉลอง') || t.contains('ดีใจ') || t.contains('สังสรรค์')) return 'celebrate';
     if (t.contains('ลดน้ำหนัก') || t.contains('คุมอาหาร') || t.contains('เบาๆ')) return 'health';
     if (t.contains('หิว') || t.contains('อยากกินจัง')) return 'hungry';
